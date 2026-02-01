@@ -1,0 +1,12 @@
+# Core dependencies (all platforms)
+pyaudio
+pynput
+pystray
+Pillow
+pyautogui
+
+# Mac-only (Apple Silicon) - MLX-accelerated Whisper
+mlx-whisper; sys_platform == "darwin"
+
+# Windows/Linux - CTranslate2-based Whisper with GPU/CPU support
+faster-whisper; sys_platform != "darwin"
