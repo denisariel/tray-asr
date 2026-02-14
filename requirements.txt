@@ -10,3 +10,7 @@ mlx-whisper; sys_platform == "darwin"
 
 # Windows/Linux - CTranslate2-based Whisper with GPU/CPU support
 faster-whisper; sys_platform != "darwin"
+
+# CUDA GPU support (Windows/Linux) — required for GPU acceleration
+nvidia-cublas-cu12; sys_platform != "darwin"
+nvidia-cudnn-cu12; sys_platform != "darwin"

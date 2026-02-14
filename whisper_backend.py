@@ -82,6 +82,43 @@ class WhisperBackend:
             print("   Install with: pip install mlx-whisper")
             sys.exit(1)
     
+    def _check_cuda_available(self):
+        """Check if CUDA is available and print diagnostic information."""
+        print("🔍 Checking CUDA availability...")
+        
+        # Check 1: Is ctranslate2 built with CUDA support?
+        try:
+            import ctranslate2
+            cuda_supported = "cuda" in ctranslate2.get_supported_compute_types("cuda")
+            if cuda_supported:
+                print("  ✅ ctranslate2 has CUDA support")
+            else:
+                print("  ❌ ctranslate2 was installed WITHOUT CUDA support")
+                print("     Fix: pip install --force-reinstall ctranslate2")
+                return False
+        except Exception as e:
+            print(f"  ❌ ctranslate2 CUDA check failed: {e}")
+            print("     This usually means CUDA libraries are not installed.")
+            print("     Fix: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+            return False
+        
+        # Check 2: Can we detect the GPU via CUDA runtime?
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_name = torch.cuda.get_device_name(0)
+                cuda_version = torch.version.cuda
+                print(f"  ✅ GPU detected: {gpu_name}")
+                print(f"  ✅ CUDA version: {cuda_version}")
+            else:
+                print("  ⚠️  PyTorch reports CUDA not available (torch is optional, continuing...)")
+        except ImportError:
+            print("  ℹ️  PyTorch not installed (optional — skipping GPU name detection)")
+        except Exception as e:
+            print(f"  ⚠️  GPU detection via PyTorch failed: {e}")
+        
+        return True
+    
     def _init_faster_whisper(self):
         """Initialize faster-whisper backend for Windows/Linux."""
         try:
@@ -89,20 +126,35 @@ class WhisperBackend:
             
             model_name = FASTER_WHISPER_MODELS.get(self.model_key, "base")
             
-            # Try to initialize with CUDA first
-            try:
-                print(f"🚀 Attempting to load faster-whisper with CUDA...")
-                self._model = WhisperModel(model_name, device="cuda", compute_type="float16")
-                print(f"✅ faster-whisper loaded with CUDA (GPU accelerated)")
-                return
-            except Exception as e:
-                print(f"⚠️  CUDA initialization failed: {e}")
-                print("   Falling back to CPU...")
+            # Check CUDA availability with diagnostics
+            cuda_available = self._check_cuda_available()
+            
+            if cuda_available:
+                try:
+                    print(f"🚀 Loading faster-whisper with CUDA: {model_name}...")
+                    self._model = WhisperModel(model_name, device="cuda", compute_type="float16")
+                    print(f"✅ faster-whisper loaded with CUDA (GPU accelerated)")
+                    return
+                except Exception as e:
+                    print(f"⚠️  CUDA model loading failed: {e}")
+                    print("")
+                    print("   Common fixes:")
+                    print("   1. Install CUDA libraries: pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+                    print("   2. Update GPU drivers: https://www.nvidia.com/Download/index.aspx")
+                    print("   3. Reinstall ctranslate2: pip install --force-reinstall ctranslate2")
+                    print("")
+                    print("   Falling back to CPU...")
+            else:
+                print("")
+                print("   ⚠️  To enable GPU acceleration, install CUDA dependencies:")
+                print("   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12")
+                print("   Then restart the app.")
+                print("")
             
             # Fallback to CPU
             print(f"💻 Loading model on CPU: {model_name}...")
             self._model = WhisperModel(model_name, device="cpu", compute_type="int8")
-            print(f"✅ faster-whisper loaded (CPU mode)")
+            print(f"✅ faster-whisper loaded (CPU mode — will be slower)")
             
         except ImportError as e:
             print(f"❌ Failed to import faster-whisper: {e}")

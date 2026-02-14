@@ -8,7 +8,7 @@ Double-tap triggers recording:
 - macOS: Command (⌘)
 - Windows/Linux: Control (Ctrl)
 
-Transcription is typed at the cursor position.
+Transcription is typed directly at the cursor position.
 """
 
 import json
@@ -41,6 +41,7 @@ CHUNK = 1024
 FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 16000  # Whisper expects 16kHz audio
+MAX_RECORDING_TIME = 30  # Maximum recording duration in seconds
 
 # Default model
 DEFAULT_MODEL = "large-v3"
@@ -53,6 +54,7 @@ PREFS_FILE = os.path.join(SCRIPT_DIR, "preferences.json")
 DEFAULT_PREFS = {
     "press_enter_after_paste": False,
     "model": DEFAULT_MODEL,
+    "input_device_index": None,  # None = system default
 }
 
 
@@ -92,6 +94,28 @@ class SpeechRecognizerTray:
         
         # Load preferences
         self.prefs = self._load_prefs()
+        
+        # Scan for input devices
+        self.input_devices = self._get_input_devices()
+        self.selected_device_index = self.prefs.get("input_device_index", None)
+        
+        # Validate the saved device still exists
+        if self.selected_device_index is not None:
+            valid_indices = [d["index"] for d in self.input_devices]
+            if self.selected_device_index not in valid_indices:
+                print(f"⚠️  Saved input device (index {self.selected_device_index}) no longer available. Resetting to default.")
+                self.selected_device_index = None
+                self.prefs["input_device_index"] = None
+                self._save_prefs()
+        
+        if self.input_devices:
+            if self.selected_device_index is not None:
+                name = next((d["name"] for d in self.input_devices if d["index"] == self.selected_device_index), "Unknown")
+                print(f"🎙️  Input device: {name} (index {self.selected_device_index})")
+            else:
+                print(f"🎙️  Input device: System default")
+        else:
+            print("⚠️  No input devices found! Recording will be disabled.")
         
         # Initialize Whisper backend (auto-detects platform)
         print(f"Initializing Whisper backend...")
@@ -148,22 +172,98 @@ class SpeechRecognizerTray:
         if self.icon:
             self.icon.icon = create_icon(recording=self.is_recording)
     
+    def _get_input_devices(self):
+        """Enumerate available audio input devices."""
+        devices = []
+        for i in range(self.audio.get_device_count()):
+            try:
+                info = self.audio.get_device_info_by_index(i)
+                if info.get("maxInputChannels", 0) > 0:
+                    devices.append({
+                        "index": i,
+                        "name": info["name"],
+                        "channels": info["maxInputChannels"],
+                        "sample_rate": int(info["defaultSampleRate"]),
+                    })
+            except Exception:
+                pass
+        
+        if devices:
+            print(f"🎙️  Found {len(devices)} input device(s):")
+            for d in devices:
+                print(f"    [{d['index']}] {d['name']}")
+        
+        return devices
+    
+    def set_input_device(self, device_index):
+        """Set the input device to use for recording."""
+        self.selected_device_index = device_index
+        self.prefs["input_device_index"] = device_index
+        self._save_prefs()
+        
+        if device_index is None:
+            print("🎙️  Input device: System default")
+        else:
+            name = next((d["name"] for d in self.input_devices if d["index"] == device_index), "Unknown")
+            print(f"🎙️  Input device: {name} (index {device_index})")
+        
+        # Rebuild menu to update checkmarks
+        if self.icon:
+            self.icon.menu = self.create_menu()
+    
+    def refresh_input_devices(self):
+        """Rescan audio input devices (reinitializes PyAudio to detect new hardware)."""
+        # PyAudio caches devices at init time — must recreate to detect changes
+        self.audio.terminate()
+        self.audio = pyaudio.PyAudio()
+        self.input_devices = self._get_input_devices()
+        
+        # Validate current selection still exists
+        if self.selected_device_index is not None:
+            valid_indices = [d["index"] for d in self.input_devices]
+            if self.selected_device_index not in valid_indices:
+                print(f"⚠️  Selected device no longer available. Resetting to default.")
+                self.selected_device_index = None
+                self.prefs["input_device_index"] = None
+                self._save_prefs()
+        
+        # Rebuild menu
+        if self.icon:
+            self.icon.menu = self.create_menu()
+    
     def start_recording(self):
         """Start recording audio from microphone."""
         with self.lock:
             if self.is_recording:
                 return
             
+            # Check if any input devices are available
+            if not self.input_devices:
+                print("⚠️  No input devices available — cannot record.")
+                return
+            
             self.is_recording = True
             self.frames = []
+            self.recording_start_time = time.time()  # Track when recording started
             
-            self.stream = self.audio.open(
+            # Build open() kwargs, adding device index if user selected one
+            open_kwargs = dict(
                 format=FORMAT,
                 channels=CHANNELS,
                 rate=RATE,
                 input=True,
-                frames_per_buffer=CHUNK
+                frames_per_buffer=CHUNK,
             )
+            if self.selected_device_index is not None:
+                open_kwargs["input_device_index"] = self.selected_device_index
+            
+            try:
+                self.stream = self.audio.open(**open_kwargs)
+            except OSError as e:
+                print(f"❌ Failed to open audio device: {e}")
+                print("   Try selecting a different input device from the tray menu.")
+                self.is_recording = False
+                return
             
             print("🔴 Recording...")
             self._update_icon()
@@ -173,9 +273,17 @@ class SpeechRecognizerTray:
             self.record_thread.start()
     
     def _record_audio(self):
-        """Record audio in a separate thread."""
+        """Record audio in a separate thread with automatic timeout."""
         while self.is_recording and self.running:
             try:
+                # Check if we've exceeded the maximum recording time
+                elapsed_time = time.time() - self.recording_start_time
+                if elapsed_time >= MAX_RECORDING_TIME:
+                    print(f"⏱️  Maximum recording time ({MAX_RECORDING_TIME}s) reached. Stopping...")
+                    # Stop recording from within the thread
+                    threading.Thread(target=self.stop_recording, daemon=True).start()
+                    break
+                
                 data = self.stream.read(CHUNK, exception_on_overflow=False)
                 self.frames.append(data)
             except Exception as e:
@@ -245,93 +353,83 @@ class SpeechRecognizerTray:
             print(f"❌ Transcription error: {e}")
     
     def _insert_text(self, text: str):
-        """Insert text at cursor position using clipboard paste."""
-        import subprocess
+        """Insert text at cursor position by typing directly (no clipboard)."""
         import platform
         
         if platform.system() == "Darwin":  # macOS
-            # Copy text to clipboard
-            process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
-            process.communicate(text.encode('utf-8'))
-            print(f"📋 Copied to clipboard: {text[:50]}...")
-            
-            # Use Quartz to simulate Cmd+V
+            # Type text using CGEventKeyboardSetUnicodeString (fast, chunked)
             try:
                 from Quartz import (
                     CGEventCreateKeyboardEvent,
+                    CGEventKeyboardSetUnicodeString,
                     CGEventPost,
-                    CGEventSetFlags,
-                    kCGEventFlagMaskCommand,
                     kCGHIDEventTap
                 )
                 
-                # Key code for 'v' is 9
-                v_keycode = 9
-                
-                # Longer delay to ensure the app regains focus
+                # Wait for focus to return to the target application
                 print("⏳ Waiting for focus to return...")
                 time.sleep(0.3)
                 
-                # Key down with Cmd
-                event = CGEventCreateKeyboardEvent(None, v_keycode, True)
-                CGEventSetFlags(event, kCGEventFlagMaskCommand)
-                CGEventPost(kCGHIDEventTap, event)
+                print(f"⌨️  Typing: {text[:50]}...")
                 
-                time.sleep(0.05)
+                # Send text in chunks of 20 chars using Unicode keyboard events
+                chunk_size = 20
+                for i in range(0, len(text), chunk_size):
+                    chunk = text[i:i + chunk_size]
+                    # Key down – attach the Unicode string to the event
+                    event_down = CGEventCreateKeyboardEvent(None, 0, True)
+                    CGEventKeyboardSetUnicodeString(event_down, len(chunk), chunk)
+                    CGEventPost(kCGHIDEventTap, event_down)
+                    # Key up
+                    event_up = CGEventCreateKeyboardEvent(None, 0, False)
+                    CGEventPost(kCGHIDEventTap, event_up)
+                    time.sleep(0.01)  # Small delay between chunks for reliability
                 
-                # Key up
-                event = CGEventCreateKeyboardEvent(None, v_keycode, False)
-                CGEventSetFlags(event, kCGEventFlagMaskCommand)
-                CGEventPost(kCGHIDEventTap, event)
-                
-                time.sleep(0.05)
-                
-                # Optionally press Enter/Return (keycode 36)
-                # Optionally press Enter/Return (keycode 36)
+                # Optionally press Enter/Return
                 if self.prefs.get("press_enter_after_paste", False):
-                    # Small delay to ensure paste completes and app handles it
-                    time.sleep(0.1) 
+                    time.sleep(0.05)
                     return_keycode = 36
                     event = CGEventCreateKeyboardEvent(None, return_keycode, True)
                     CGEventPost(kCGHIDEventTap, event)
                     time.sleep(0.01)
                     event = CGEventCreateKeyboardEvent(None, return_keycode, False)
                     CGEventPost(kCGHIDEventTap, event)
-                    print("✅ Text pasted with Enter!")
+                    print("✅ Text typed with Enter!")
                 else:
-                    print("✅ Text pasted!")
+                    print("✅ Text typed!")
                 
             except Exception as e:
-                print(f"⚠️  Quartz paste failed: {e}")
-                print("� Text is in clipboard - press ⌘V to paste manually")
+                print(f"⚠️  Quartz typing failed: {e}, falling back to pyautogui...")
+                try:
+                    time.sleep(0.3)
+                    pyautogui.write(text, interval=0.0)
+                    if self.prefs.get("press_enter_after_paste", False):
+                        pyautogui.press('enter')
+                        print("✅ Text typed with Enter!")
+                    else:
+                        print("✅ Text typed!")
+                except Exception as e2:
+                    print(f"❌ Fallback typing also failed: {e2}")
         else:
-            # Windows/Linux: use pynput
-            self._clipboard_paste_pynput(text)
+            # Windows/Linux: use pyautogui directly
+            self._type_text_direct(text)
     
-    def _clipboard_paste_pynput(self, text: str):
-        """Fallback: paste text using pynput."""
-        import subprocess
-        
-        # Copy to clipboard (Windows)
-        subprocess.run(['clip'], input=text.encode(), shell=True)
-        
-        # Simulate Ctrl+V
-        from pynput.keyboard import Controller, Key
-        kb = Controller()
-        time.sleep(0.05)
-        kb.press(Key.ctrl)
-        kb.press('v')
-        kb.release('v')
-        kb.release(Key.ctrl)
-        
-        # Optionally press Enter
-        if self.prefs.get("press_enter_after_paste", False):
-            time.sleep(0.1)
-            kb.press(Key.enter)
-            kb.release(Key.enter)
-            print("✅ Text pasted with Enter!")
-        else:
-            print("✅ Text pasted!")
+    def _type_text_direct(self, text: str):
+        """Type text directly using pyautogui (Windows/Linux)."""
+        try:
+            print(f"⌨️  Typing: {text[:50]}...")
+            time.sleep(0.3)  # Wait for focus
+            pyautogui.write(text, interval=0.0)
+            
+            # Optionally press Enter
+            if self.prefs.get("press_enter_after_paste", False):
+                time.sleep(0.05)
+                pyautogui.press('enter')
+                print("✅ Text typed with Enter!")
+            else:
+                print("✅ Text typed!")
+        except Exception as e:
+            print(f"❌ Typing failed: {e}")
     
     def _is_trigger_key(self, key):
         """Check if the key is one of the trigger keys (Cmd or Ctrl)."""
@@ -389,10 +487,36 @@ class SpeechRecognizerTray:
             for key in available_models.keys()
         ]
         
+        # Input device menu items
+        def make_device_action(idx):
+            return lambda: self.set_input_device(idx)
+        
+        def is_device_selected(idx):
+            return lambda item: self.selected_device_index == idx
+        
+        device_items = [
+            Item(
+                "System Default",
+                make_device_action(None),
+                checked=lambda item: self.selected_device_index is None
+            )
+        ]
+        for dev in self.input_devices:
+            device_items.append(
+                Item(
+                    dev["name"],
+                    make_device_action(dev["index"]),
+                    checked=is_device_selected(dev["index"])
+                )
+            )
+        device_items.append(Menu.SEPARATOR)
+        device_items.append(Item("🔄 Refresh Devices", lambda: self.refresh_input_devices()))
+        
         return Menu(
             Item(f"🎤 Double-tap {self.trigger_key_name} to record", lambda: None, enabled=False),
             Menu.SEPARATOR,
             Item("Model", Menu(*model_items)),
+            Item("Input Device", Menu(*device_items)),
             Item(
                 "Press Enter after paste",
                 self.toggle_enter_after_paste,
