@@ -402,7 +402,7 @@ class SpeechRecognizerTray:
                 print(f"⚠️  Quartz typing failed: {e}, falling back to pyautogui...")
                 try:
                     time.sleep(0.3)
-                    pyautogui.write(text, interval=0.0)
+                    pyautogui.write(text, interval=0.02)
                     if self.prefs.get("press_enter_after_paste", False):
                         pyautogui.press('enter')
                         print("✅ Text typed with Enter!")
@@ -415,12 +415,17 @@ class SpeechRecognizerTray:
             self._type_text_direct(text)
     
     def _type_text_direct(self, text: str):
-        """Type text directly using pyautogui (Windows/Linux)."""
+        """Type text at cursor position (Windows/Linux)."""
         try:
             print(f"⌨️  Typing: {text[:50]}...")
             time.sleep(0.3)  # Wait for focus
-            pyautogui.write(text, interval=0.0)
-            
+
+            if platform.system() == "Windows":
+                self._type_unicode_win32(text)
+            else:
+                # Linux fallback
+                pyautogui.write(text, interval=0.02)
+
             # Optionally press Enter
             if self.prefs.get("press_enter_after_paste", False):
                 time.sleep(0.05)
@@ -430,6 +435,81 @@ class SpeechRecognizerTray:
                 print("✅ Text typed!")
         except Exception as e:
             print(f"❌ Typing failed: {e}")
+
+    def _type_unicode_win32(self, text: str):
+        """Type Unicode text on Windows using SendInput with KEYEVENTF_UNICODE."""
+        import ctypes
+        from ctypes import wintypes
+
+        ULONG_PTR = ctypes.POINTER(ctypes.c_ulong)
+
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+
+        class MOUSEINPUT(ctypes.Structure):
+            _fields_ = [
+                ("dx", wintypes.LONG),
+                ("dy", wintypes.LONG),
+                ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ULONG_PTR),
+            ]
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ULONG_PTR),
+            ]
+
+        class HARDWAREINPUT(ctypes.Structure):
+            _fields_ = [
+                ("uMsg", wintypes.DWORD),
+                ("wParamL", wintypes.WORD),
+                ("wParamH", wintypes.WORD),
+            ]
+
+        class INPUT(ctypes.Structure):
+            class _INPUT(ctypes.Union):
+                _fields_ = [
+                    ("mi", MOUSEINPUT),
+                    ("ki", KEYBDINPUT),
+                    ("hi", HARDWAREINPUT),
+                ]
+            _fields_ = [
+                ("type", wintypes.DWORD),
+                ("_input", _INPUT),
+            ]
+
+        SendInput = ctypes.windll.user32.SendInput
+        SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+        SendInput.restype = wintypes.UINT
+
+        for char in text:
+            # Key down
+            inp_down = INPUT()
+            inp_down.type = INPUT_KEYBOARD
+            inp_down._input.ki.wVk = 0
+            inp_down._input.ki.wScan = ord(char)
+            inp_down._input.ki.dwFlags = KEYEVENTF_UNICODE
+            inp_down._input.ki.time = 0
+            inp_down._input.ki.dwExtraInfo = None
+
+            # Key up
+            inp_up = INPUT()
+            inp_up.type = INPUT_KEYBOARD
+            inp_up._input.ki.wVk = 0
+            inp_up._input.ki.wScan = ord(char)
+            inp_up._input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+            inp_up._input.ki.time = 0
+            inp_up._input.ki.dwExtraInfo = None
+
+            SendInput(2, (INPUT * 2)(inp_down, inp_up), ctypes.sizeof(INPUT))
+            time.sleep(0.005)  # Small delay for reliability
     
     def _is_trigger_key(self, key):
         """Check if the key is one of the trigger keys (Cmd or Ctrl)."""
