@@ -18,6 +18,49 @@ IS_MACOS = platform.system() == "Darwin"
 IS_APPLE_SILICON = IS_MACOS and platform.machine() == "arm64"
 
 
+def _register_nvidia_dll_dirs():
+    """
+    On Windows, pip-installed NVIDIA packages (nvidia-cublas-cu12, nvidia-cudnn-cu12)
+    place DLLs in site-packages/nvidia/*/bin/ which are NOT on the system PATH.
+    We add them to the PATH env var so ctranslate2's native loader can find them.
+    """
+    if platform.system() != "Windows":
+        return
+
+    import site
+
+    # Collect all nvidia DLL directories from site-packages
+    site_dirs = site.getsitepackages()
+    try:
+        user_site = site.getusersitepackages()
+        if user_site:
+            site_dirs.append(user_site)
+    except AttributeError:
+        pass
+
+    dll_dirs = []
+    for sp in site_dirs:
+        nvidia_dir = os.path.join(sp, "nvidia")
+        if not os.path.isdir(nvidia_dir):
+            continue
+        for sub in os.listdir(nvidia_dir):
+            bin_dir = os.path.join(nvidia_dir, sub, "bin")
+            if os.path.isdir(bin_dir):
+                dll_dirs.append(bin_dir)
+                # Also register with os.add_dll_directory for Python-level loading
+                try:
+                    os.add_dll_directory(bin_dir)
+                except OSError:
+                    pass
+
+    # Prepend to PATH so the OS-level DLL loader can find them too
+    if dll_dirs:
+        os.environ["PATH"] = os.pathsep.join(dll_dirs) + os.pathsep + os.environ.get("PATH", "")
+
+
+_register_nvidia_dll_dirs()
+
+
 # Model mappings for each backend
 MLX_MODELS = {
     "tiny": "mlx-community/whisper-tiny",
@@ -89,7 +132,7 @@ class WhisperBackend:
         # Check 1: Is ctranslate2 built with CUDA support?
         try:
             import ctranslate2
-            cuda_supported = "cuda" in ctranslate2.get_supported_compute_types("cuda")
+            cuda_supported = len(ctranslate2.get_supported_compute_types("cuda")) > 0
             if cuda_supported:
                 print("  ✅ ctranslate2 has CUDA support")
             else:

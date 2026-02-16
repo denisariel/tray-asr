@@ -46,7 +46,7 @@ Grant permissions: **System Settings → Privacy & Security → Accessibility** 
 
 #### GPU Acceleration (NVIDIA)
 
-GPU support is **automatically set up** when you install the dependencies via `run.bat`. The required CUDA libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) are included in `requirements.txt`.
+GPU support is **automatically set up** when you install the dependencies via `run.bat`. The required CUDA libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) are included in `requirements.txt`. The app automatically registers NVIDIA DLL paths at startup so ctranslate2 can find them.
 
 **Prerequisites:**
 - An NVIDIA GPU with Compute Capability ≥ 3.0 (most GPUs from 2012 onwards)
@@ -74,7 +74,7 @@ If the app falls back to CPU mode despite having an NVIDIA GPU:
 
 3. **Manually install CUDA libraries** — If the automatic setup didn't work:
    ```batch
-   .venv\Scripts\pip install --force-reinstall nvidia-cublas-cu12 nvidia-cudnn-cu12 ctranslate2
+   uv pip install --python .venv\Scripts\python.exe --force-reinstall nvidia-cublas-cu12 nvidia-cudnn-cu12 ctranslate2
    ```
 
 4. **Check the console output** — The app prints detailed diagnostics on startup. Look for `❌` messages that explain exactly what's missing.
