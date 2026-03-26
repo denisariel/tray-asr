@@ -560,7 +560,7 @@ class SpeechRecognizerTray:
         available_models = self.backend.available_models
         model_items = [
             Item(
-                f"{'●' if self.backend.model_key == key else '○'} {key}",
+                key,
                 make_model_action(key),
                 checked=is_model_selected(key)
             )
