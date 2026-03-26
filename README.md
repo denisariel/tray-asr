@@ -56,7 +56,7 @@ GPU support is **automatically set up** when you install the dependencies via `r
 ```
 🔍 Checking CUDA availability...
   ✅ ctranslate2 has CUDA support
-🚀 Loading faster-whisper with CUDA: large-v3...
+🚀 Loading faster-whisper with CUDA: large-v3-turbo...
 ✅ faster-whisper loaded with CUDA (GPU accelerated)
 ```
 
@@ -121,6 +121,7 @@ For GPU acceleration, ensure you have the latest NVIDIA drivers installed. The C
 | `base` | ~150MB | Better accuracy | Balanced |
 | `small` | ~500MB | Good quality | Recommended |
 | `medium` | ~1.5GB | High quality | Slower |
+| `large-v3-turbo` | ~1.5GB | Fast & High quality | Recommended default |
 | `large-v3` | ~3GB | Best quality | Requires more RAM |
 
 Change models via the tray icon menu.

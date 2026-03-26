@@ -67,7 +67,7 @@ MLX_MODELS = {
     "base": "mlx-community/whisper-base-mlx",
     "small": "mlx-community/whisper-small-mlx",
     "medium": "mlx-community/whisper-medium-mlx",
-    "large-v3-4bit": "mlx-community/whisper-large-v3-mlx-4bit",
+    "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
     "large-v3": "mlx-community/whisper-large-v3-mlx",
 }
 
@@ -76,13 +76,12 @@ FASTER_WHISPER_MODELS = {
     "base": "base",
     "small": "small",
     "medium": "medium",
-    # No 4-bit quantized version for faster-whisper, use int8
-    "large-v3-4bit": "large-v3",
+    "large-v3-turbo": "large-v3-turbo",
     "large-v3": "large-v3",
 }
 
 # Default model to use
-DEFAULT_MODEL = "large-v3"
+DEFAULT_MODEL = "large-v3-turbo"
 
 
 class WhisperBackend:

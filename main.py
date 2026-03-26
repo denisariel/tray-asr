@@ -44,7 +44,7 @@ RATE = 16000  # Whisper expects 16kHz audio
 MAX_RECORDING_TIME = 30  # Maximum recording duration in seconds
 
 # Default model
-DEFAULT_MODEL = "large-v3"
+DEFAULT_MODEL = "large-v3-turbo"
 
 # Preferences file (in same directory as script)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
